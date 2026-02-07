@@ -17,6 +17,29 @@ export interface NotificationOptions {
 /** Tray connection status */
 export type TrayStatus = 'connected' | 'degraded' | 'disconnected';
 
+/** Health status for individual connected apps */
+export type AppHealthStatus = 'healthy' | 'warning' | 'error' | 'unknown';
+
+/** Information about a connected app */
+export interface ConnectedAppInfo {
+  /** Unique identifier for the app */
+  id: string;
+  /** Display name of the app */
+  name: string;
+  /** Health status of the app */
+  status: AppHealthStatus;
+}
+
+/** Extended tray information for menu bar display */
+export interface TrayInfo {
+  /** Overall connection status */
+  status: TrayStatus;
+  /** List of connected apps with their status */
+  connectedApps?: ConnectedAppInfo[];
+  /** Custom status message to display */
+  statusMessage?: string;
+}
+
 /** Auto-update status */
 export type UpdateStatus =
   | 'idle'
@@ -84,6 +107,19 @@ export interface ElectronBridge {
      * @param count - Badge count (0 to clear)
      */
     setBadge(count: number): Promise<void>;
+
+    /**
+     * Set extended tray info (connected apps, health status, etc.)
+     * This updates the menu bar context menu with detailed information
+     * @param info - Extended tray information
+     */
+    setInfo(info: TrayInfo): Promise<void>;
+
+    /**
+     * Get current tray info including uptime
+     * @returns Current tray information with app uptime
+     */
+    getInfo(): Promise<TrayInfo & { uptime: number }>;
   };
 
   /** Application controls */
@@ -221,6 +257,8 @@ export const IPC_CHANNELS = {
   // Tray
   TRAY_SET_STATUS: 'tray:setStatus',
   TRAY_SET_BADGE: 'tray:setBadge',
+  TRAY_SET_INFO: 'tray:setInfo',
+  TRAY_GET_INFO: 'tray:getInfo',
 
   // App
   APP_MINIMIZE: 'app:minimize',
