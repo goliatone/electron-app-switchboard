@@ -11,6 +11,9 @@ import {
   IPC_CHANNELS,
   NotificationOptions,
   TrayStatus,
+  TrayInfo,
+  ConnectedAppInfo,
+  AppHealthStatus,
   UpdateInfo,
 } from '../shared/types';
 
@@ -74,6 +77,57 @@ function validateNotificationOptions(options: unknown): NotificationOptions | un
   }
   if (opts.tag !== undefined) {
     result.tag = validateString(opts.tag, 'tag');
+  }
+
+  return result;
+}
+
+/**
+ * Validate app health status value
+ */
+function validateAppHealthStatus(value: unknown): AppHealthStatus {
+  if (value !== 'healthy' && value !== 'warning' && value !== 'error' && value !== 'unknown') {
+    throw new Error('Invalid app health status');
+  }
+  return value;
+}
+
+/**
+ * Validate connected app info
+ */
+function validateConnectedAppInfo(info: unknown): ConnectedAppInfo {
+  if (!info || typeof info !== 'object') {
+    throw new Error('Connected app info must be an object');
+  }
+  const appInfo = info as Record<string, unknown>;
+  return {
+    id: validateString(appInfo.id, 'app id'),
+    name: validateString(appInfo.name, 'app name'),
+    status: validateAppHealthStatus(appInfo.status),
+  };
+}
+
+/**
+ * Validate tray info
+ */
+function validateTrayInfo(info: unknown): TrayInfo {
+  if (!info || typeof info !== 'object') {
+    throw new Error('Tray info must be an object');
+  }
+  const trayInfo = info as Record<string, unknown>;
+  const result: TrayInfo = {
+    status: validateTrayStatus(trayInfo.status),
+  };
+
+  if (trayInfo.connectedApps !== undefined) {
+    if (!Array.isArray(trayInfo.connectedApps)) {
+      throw new Error('connectedApps must be an array');
+    }
+    result.connectedApps = trayInfo.connectedApps.map(validateConnectedAppInfo);
+  }
+
+  if (trayInfo.statusMessage !== undefined) {
+    result.statusMessage = validateString(trayInfo.statusMessage, 'statusMessage');
   }
 
   return result;
@@ -146,6 +200,15 @@ const electronBridge: ElectronBridge = {
         throw new Error('Badge count must be non-negative');
       }
       await ipcRenderer.invoke(IPC_CHANNELS.TRAY_SET_BADGE, validCount);
+    },
+
+    async setInfo(info: TrayInfo): Promise<void> {
+      const validInfo = validateTrayInfo(info);
+      await ipcRenderer.invoke(IPC_CHANNELS.TRAY_SET_INFO, validInfo);
+    },
+
+    async getInfo(): Promise<TrayInfo & { uptime: number }> {
+      return ipcRenderer.invoke(IPC_CHANNELS.TRAY_GET_INFO);
     },
   },
 
