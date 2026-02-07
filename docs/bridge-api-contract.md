@@ -42,11 +42,16 @@ Validation:
 
 - `setStatus(status: 'connected' | 'degraded' | 'disconnected'): Promise<void>`
 - `setBadge(count: number): Promise<void>`
+- `setInfo(info: TrayInfo): Promise<void>`
+- `getInfo(): Promise<TrayInfo & { uptime: number }>`
 
 Validation:
 
 - `status` must be one of the three enum values.
 - `count` must be finite and non-negative.
+- `setInfo.status` must be one of the three tray status values.
+- `setInfo.connectedApps` (if provided) must be an array of `{ id: string, name: string, status: 'healthy' | 'warning' | 'error' | 'unknown' }`.
+- `setInfo.statusMessage` (if provided) must be a string.
 
 ### `app`
 
@@ -141,4 +146,3 @@ Main process rejects all invokes from untrusted origins, except controlled fallb
 - Treat every method as potentially throwing (origin rejection, invalid input, disabled feature, runtime backend failure).
 - Always unsubscribe update listeners on component unmount.
 - Use `window.electronBridge?.isElectron` to gate desktop-only features.
-

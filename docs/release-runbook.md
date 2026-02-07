@@ -8,6 +8,7 @@ Primary sources:
 - `electron-builder.json`
 - `scripts/notarize.js`
 - `.github/workflows/release-macos.yml`
+- `docs/macos-notarization-setup.md`
 
 ## Scope
 
@@ -118,6 +119,7 @@ Signing/notarization fails:
 
 - Confirm all Apple/certificate secrets are present and valid.
 - Re-run workflow with `publish=false` to isolate packaging from publish step.
+- Follow `docs/macos-notarization-setup.md` to verify credential values and source.
 
 No updates detected:
 
@@ -127,4 +129,3 @@ No updates detected:
 Build passes but app not notarized:
 
 - Check `scripts/notarize.js` logs for credential-missing skip.
-
