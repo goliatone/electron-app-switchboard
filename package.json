@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "tsc && electron .",
     "build": "tsc",
+    "icons:generate": "node scripts/generate-icons.mjs assets/logo.svg",
     "test": "npm run build && node --test dist/shared/*.test.js",
     "qa:cross-phase": "npm test && node scripts/verify-cross-phase-qa.js",
     "start": "electron .",
