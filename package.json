@@ -12,6 +12,7 @@
     "dev": "tsc && electron .",
     "build": "tsc",
     "icons:generate": "node scripts/generate-icons.mjs assets/logo.svg",
+    "icons:generate:mac:squircle": "node scripts/generate-mac-squircle-icons.mjs assets/logo_white.svg assets/icons",
     "test": "npm run build && node --test dist/shared/*.test.js",
     "qa:cross-phase": "npm test && node scripts/verify-cross-phase-qa.js",
     "start": "electron .",
