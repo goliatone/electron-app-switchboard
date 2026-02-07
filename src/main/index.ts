@@ -20,7 +20,15 @@ import * as path from 'path';
 import Store from 'electron-store';
 import { autoUpdater } from 'electron-updater';
 import { loadConfig, isTrustedOrigin, AppConfig } from '../shared/config';
-import { IPC_CHANNELS, TrayStatus, UpdateInfo, UpdateStatus } from '../shared/types';
+import {
+  IPC_CHANNELS,
+  TrayStatus,
+  TrayInfo,
+  ConnectedAppInfo,
+  AppHealthStatus,
+  UpdateInfo,
+  UpdateStatus,
+} from '../shared/types';
 import { extractDeepLinkFromArgv, parseDeepLink } from '../shared/deeplink';
 import {
   LOCAL_STORAGE_NAMESPACE,
@@ -53,7 +61,9 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let currentTrayStatus: TrayStatus = 'disconnected';
+let currentTrayInfo: TrayInfo = { status: 'disconnected' };
 let isFallbackPageActive = false;
+const appStartTime = Date.now();
 const pendingDeepLinks: string[] = [];
 let localStore: Store<Record<string, string>> | null = null;
 
@@ -73,6 +83,8 @@ let keytarClient: KeytarClient | null = null;
 let keytarLoadError: Error | null = null;
 let secureFallbackStore: Store<Record<string, string>> | null = null;
 let keytarFallbackWarned = false;
+const VALID_TRAY_STATUSES: readonly TrayStatus[] = ['connected', 'degraded', 'disconnected'];
+const VALID_APP_HEALTH_STATUSES: readonly AppHealthStatus[] = ['healthy', 'warning', 'error', 'unknown'];
 
 // -----------------------------------------------------------------------------
 // Single Instance Lock
@@ -1050,28 +1062,7 @@ function loadFallbackPage(title: string, message: string): void {
 // -----------------------------------------------------------------------------
 
 function createTray(): void {
-  // Use a simple 16x16 icon (placeholder - replace with actual icon)
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'assets/icons/tray-icon.png')
-    : path.join(__dirname, '../../assets/icons/tray-icon.png');
-
-  // Create a simple placeholder icon if the file doesn't exist
-  let trayIcon: NativeImage;
-  try {
-    trayIcon = nativeImage.createFromPath(iconPath);
-    if (trayIcon.isEmpty()) {
-      trayIcon = createPlaceholderTrayIcon();
-    }
-  } catch {
-    trayIcon = createPlaceholderTrayIcon();
-  }
-
-  // On macOS, use template image for dark/light mode support
-  if (process.platform === 'darwin') {
-    trayIcon.setTemplateImage(true);
-  }
-
-  tray = new Tray(trayIcon);
+  tray = new Tray(createStatusTrayIcon(currentTrayStatus));
   tray.setToolTip('Switchboard');
 
   updateTrayMenu();
@@ -1094,23 +1085,40 @@ function createTray(): void {
   });
 }
 
-function createPlaceholderTrayIcon(): NativeImage {
-  // Create a simple 16x16 placeholder icon
+function createStatusTrayIcon(status: TrayStatus = currentTrayStatus): NativeImage {
+  // Draw a small status glyph for the tray icon:
+  // connected = filled circle, degraded = half-filled circle, disconnected = ring.
   const size = 16;
   const canvas = Buffer.alloc(size * size * 4);
+  const center = (size - 1) / 2;
+  const outerRadius = size / 2 - 2;
+  const innerRadius = outerRadius - 2;
+  const color = process.platform === 'darwin' ? { r: 0, g: 0, b: 0 } : getStatusColor(status);
 
-  // Fill with a simple circle pattern
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const idx = (y * size + x) * 4;
-      const cx = size / 2;
-      const cy = size / 2;
-      const r = size / 2 - 2;
-      const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      const pixelX = x + 0.5;
+      const pixelY = y + 0.5;
+      const distance = Math.sqrt((pixelX - center) ** 2 + (pixelY - center) ** 2);
+      const isRing = distance <= outerRadius && distance >= innerRadius;
+      const isFilled = distance <= outerRadius;
+      const isHalfFill = distance < innerRadius && pixelX <= center;
 
-      if (dist <= r) {
-        // Inside circle - use status color
-        const color = getStatusColor(currentTrayStatus);
+      let shouldFill = false;
+      switch (status) {
+        case 'connected':
+          shouldFill = isFilled;
+          break;
+        case 'degraded':
+          shouldFill = isRing || isHalfFill;
+          break;
+        case 'disconnected':
+          shouldFill = isRing;
+          break;
+      }
+
+      if (shouldFill) {
         canvas[idx] = color.r;     // R
         canvas[idx + 1] = color.g; // G
         canvas[idx + 2] = color.b; // B
@@ -1125,7 +1133,11 @@ function createPlaceholderTrayIcon(): NativeImage {
     }
   }
 
-  return nativeImage.createFromBuffer(canvas, { width: size, height: size });
+  const icon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
+  if (process.platform === 'darwin') {
+    icon.setTemplateImage(true);
+  }
+  return icon;
 }
 
 function getStatusColor(status: TrayStatus): { r: number; g: number; b: number } {
@@ -1139,6 +1151,28 @@ function getStatusColor(status: TrayStatus): { r: number; g: number; b: number }
   }
 }
 
+function formatUptime(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+}
+
+function getHealthIcon(status: string): string {
+  switch (status) {
+    case 'healthy':
+      return '●';
+    case 'warning':
+      return '◐';
+    case 'error':
+      return '○';
+    default:
+      return '?';
+  }
+}
+
 function updateTrayMenu(): void {
   if (!tray) return;
 
@@ -1147,9 +1181,32 @@ function updateTrayMenu(): void {
     currentTrayStatus === 'degraded' ? '◐ Degraded' :
     '○ Disconnected';
 
-  const contextMenu = Menu.buildFromTemplate([
+  const menuItems: Electron.MenuItemConstructorOptions[] = [
     { label: statusText, enabled: false },
-    { type: 'separator' },
+  ];
+
+  // Add custom status message if provided
+  if (currentTrayInfo.statusMessage) {
+    menuItems.push({ label: currentTrayInfo.statusMessage, enabled: false });
+  }
+
+  // Add uptime
+  const uptime = Math.floor((Date.now() - appStartTime) / 1000);
+  menuItems.push({ label: `Uptime: ${formatUptime(uptime)}`, enabled: false });
+
+  menuItems.push({ type: 'separator' });
+
+  // Add connected apps section if available
+  if (currentTrayInfo.connectedApps && currentTrayInfo.connectedApps.length > 0) {
+    menuItems.push({ label: 'Connected Apps', enabled: false });
+    for (const appInfo of currentTrayInfo.connectedApps) {
+      const icon = getHealthIcon(appInfo.status);
+      menuItems.push({ label: `  ${icon} ${appInfo.name}`, enabled: false });
+    }
+    menuItems.push({ type: 'separator' });
+  }
+
+  menuItems.push(
     {
       label: 'Open Switchboard',
       click: () => {
@@ -1176,19 +1233,81 @@ function updateTrayMenu(): void {
         isQuitting = true;
         app.quit();
       },
-    },
-  ]);
+    }
+  );
 
+  const contextMenu = Menu.buildFromTemplate(menuItems);
   tray.setContextMenu(contextMenu);
 }
 
 function updateTrayStatus(status: TrayStatus): void {
   currentTrayStatus = status;
+  currentTrayInfo = { ...currentTrayInfo, status };
   logDiagnostic('info', 'tray.status_changed', 'Tray status updated', { status });
   if (tray) {
-    tray.setImage(createPlaceholderTrayIcon());
+    tray.setImage(createStatusTrayIcon(status));
     updateTrayMenu();
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isTrayStatus(value: unknown): value is TrayStatus {
+  return typeof value === 'string' && VALID_TRAY_STATUSES.includes(value as TrayStatus);
+}
+
+function isAppHealthStatus(value: unknown): value is AppHealthStatus {
+  return (
+    typeof value === 'string' &&
+    VALID_APP_HEALTH_STATUSES.includes(value as AppHealthStatus)
+  );
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be a string`);
+  }
+  return value;
+}
+
+function validateConnectedAppInfoPayload(info: unknown): ConnectedAppInfo {
+  if (!isRecord(info)) {
+    throw new Error('connected app info must be an object');
+  }
+  if (!isAppHealthStatus(info.status)) {
+    throw new Error('connected app status must be one of: healthy, warning, error, unknown');
+  }
+
+  return {
+    id: requireString(info.id, 'connected app id'),
+    name: requireString(info.name, 'connected app name'),
+    status: info.status,
+  };
+}
+
+function validateTrayInfoPayload(info: unknown): TrayInfo {
+  if (!isRecord(info)) {
+    throw new Error('Invalid tray info');
+  }
+  if (!isTrayStatus(info.status)) {
+    throw new Error('Invalid tray status in info');
+  }
+
+  const validated: TrayInfo = { status: info.status };
+
+  if (info.statusMessage !== undefined) {
+    validated.statusMessage = requireString(info.statusMessage, 'statusMessage');
+  }
+  if (info.connectedApps !== undefined) {
+    if (!Array.isArray(info.connectedApps)) {
+      throw new Error('connectedApps must be an array');
+    }
+    validated.connectedApps = info.connectedApps.map(validateConnectedAppInfoPayload);
+  }
+
+  return validated;
 }
 
 // -----------------------------------------------------------------------------
@@ -1262,7 +1381,7 @@ function setupIpcHandlers(): void {
     if (!validateSender(event)) {
       throw new Error('IPC call from untrusted origin');
     }
-    if (!['connected', 'degraded', 'disconnected'].includes(status)) {
+    if (!isTrayStatus(status)) {
       throw new Error('Invalid tray status');
     }
     updateTrayStatus(status);
@@ -1279,6 +1398,27 @@ function setupIpcHandlers(): void {
       app.dock?.setBadge(count > 0 ? String(count) : '');
     }
     // macOS v1: dock badge only.
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TRAY_SET_INFO, async (event, info: TrayInfo) => {
+    if (!validateSender(event)) {
+      throw new Error('IPC call from untrusted origin');
+    }
+    const validatedInfo = validateTrayInfoPayload(info);
+    currentTrayInfo = validatedInfo;
+    updateTrayStatus(validatedInfo.status);
+    logDiagnostic('info', 'tray.info_updated', 'Tray info updated', {
+      status: validatedInfo.status,
+      connectedAppsCount: validatedInfo.connectedApps?.length ?? 0,
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TRAY_GET_INFO, async (event) => {
+    if (!validateSender(event)) {
+      throw new Error('IPC call from untrusted origin');
+    }
+    const uptime = Math.floor((Date.now() - appStartTime) / 1000);
+    return { ...currentTrayInfo, uptime };
   });
 
   // App controls
