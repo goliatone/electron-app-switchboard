@@ -46,6 +46,7 @@ import {
   exportDiagnosticsLog,
   getDiagnosticsLogPath,
 } from './diagnostics';
+import { getSplashDataUrl, shouldShowSplash } from './splash';
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -63,6 +64,9 @@ let isQuitting = false;
 let currentTrayStatus: TrayStatus = 'disconnected';
 let currentTrayInfo: TrayInfo = { status: 'disconnected' };
 let isFallbackPageActive = false;
+let isSplashActive = false;
+let splashNavigationTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let suppressSplashAutoNavigation = false;
 const appStartTime = Date.now();
 const pendingDeepLinks: string[] = [];
 let localStore: Store<Record<string, string>> | null = null;
@@ -85,6 +89,15 @@ let secureFallbackStore: Store<Record<string, string>> | null = null;
 let keytarFallbackWarned = false;
 const VALID_TRAY_STATUSES: readonly TrayStatus[] = ['connected', 'degraded', 'disconnected'];
 const VALID_APP_HEALTH_STATUSES: readonly AppHealthStatus[] = ['healthy', 'warning', 'error', 'unknown'];
+
+function cancelPendingSplashNavigation(reason: string): void {
+  if (splashNavigationTimeoutId === null) return;
+  clearTimeout(splashNavigationTimeoutId);
+  splashNavigationTimeoutId = null;
+  logDiagnostic('debug', 'splash.navigation_cancelled', 'Cancelled pending splash APP_URL navigation', {
+    reason,
+  });
+}
 
 // -----------------------------------------------------------------------------
 // Single Instance Lock
@@ -126,13 +139,18 @@ app.on('open-url', (event, url) => {
 // -----------------------------------------------------------------------------
 
 function createWindow(): BrowserWindow {
+  const useSplash = shouldShowSplash(config.splash);
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    show: !config.startInTray,
-    title: 'Switchboard',
+    // Hide window initially if using splash or starting in tray
+    show: !config.startInTray && !useSplash,
+    // Match background color to splash for seamless transition
+    backgroundColor: config.splash.backgroundColor,
+    title: config.splash.appName,
     webPreferences: {
       // Security: isolate renderer from Node.js
       contextIsolation: true,
@@ -155,26 +173,101 @@ function createWindow(): BrowserWindow {
     },
   });
 
-  // Load the remote app URL
+  // Reset state flags
+  if (splashNavigationTimeoutId !== null) {
+    clearTimeout(splashNavigationTimeoutId);
+    splashNavigationTimeoutId = null;
+  }
+  suppressSplashAutoNavigation = false;
   isFallbackPageActive = false;
-  mainWindow.loadURL(config.appUrl).catch((err) => {
-    console.error('Failed to load app URL:', err);
-    logDiagnostic('error', 'window.load_url_failed', 'Failed to load APP_URL', {
-      appUrl: config.appUrl,
-      error: err,
+  isSplashActive = false;
+
+  if (useSplash) {
+    // Load splash screen first
+    isSplashActive = true;
+    const appVersion = app.getVersion();
+    const splashUrl = getSplashDataUrl(config.splash, appVersion, config.configDirectory);
+
+    logDiagnostic('info', 'splash.loading', 'Loading splash screen', {
+      customHtmlPath: config.splash.customHtmlPath,
     });
-    loadFallbackPage('Connection Failed', `Unable to connect to ${config.appUrl}`);
-  });
+
+    mainWindow.loadURL(splashUrl).then(() => {
+      // Show window with splash visible
+      if (!config.startInTray) {
+        mainWindow?.show();
+      }
+
+      // Now load the actual app URL
+      logDiagnostic('info', 'splash.navigating', 'Navigating from splash to APP_URL', {
+        appUrl: config.appUrl,
+      });
+
+      // Small delay to ensure splash is rendered before navigation
+      if (suppressSplashAutoNavigation) {
+        logDiagnostic('debug', 'splash.navigation_skipped', 'Skipped splash APP_URL navigation due to explicit navigation request');
+        return;
+      }
+
+      splashNavigationTimeoutId = setTimeout(() => {
+        splashNavigationTimeoutId = null;
+        if (!isSplashActive || !mainWindow) {
+          return;
+        }
+        if (suppressSplashAutoNavigation) {
+          return;
+        }
+        loadAppUrl();
+      }, 100);
+    }).catch((err) => {
+      console.error('Failed to load splash screen:', err);
+      logDiagnostic('warn', 'splash.load_failed', 'Failed to load splash, loading APP_URL directly', {
+        error: err,
+      });
+      isSplashActive = false;
+      if (!config.startInTray) {
+        mainWindow?.show();
+      }
+      loadAppUrl();
+    });
+  } else {
+    // No splash - load app URL directly
+    loadAppUrl();
+  }
+
+  /**
+   * Load the app URL with error handling
+   */
+  function loadAppUrl(): void {
+    if (!mainWindow) return;
+
+    mainWindow.loadURL(config.appUrl).catch((err) => {
+      console.error('Failed to load app URL:', err);
+      logDiagnostic('error', 'window.load_url_failed', 'Failed to load APP_URL', {
+        appUrl: config.appUrl,
+        error: err,
+      });
+      isSplashActive = false;
+      loadFallbackPage('Connection Failed', `Unable to connect to ${config.appUrl}`);
+    });
+  }
 
   // Handle load failures
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    // Ignore failures for splash screen data URLs
+    if (validatedURL.startsWith('data:text/html')) {
+      return;
+    }
+
     console.error(`Failed to load: ${validatedURL} - ${errorCode}: ${errorDescription}`);
     logDiagnostic('warn', 'window.did_fail_load', 'BrowserWindow failed to load URL', {
       validatedURL,
       errorCode,
       errorDescription,
     });
+
     if (validatedURL === config.appUrl || validatedURL.startsWith(config.appUrl)) {
+      isSplashActive = false;
       loadFallbackPage('Connection Failed', `Unable to connect: ${errorDescription}`);
     }
   });
@@ -246,12 +339,26 @@ function createWindow(): BrowserWindow {
   });
 
   mainWindow.on('closed', () => {
+    if (splashNavigationTimeoutId !== null) {
+      clearTimeout(splashNavigationTimeoutId);
+      splashNavigationTimeoutId = null;
+    }
     mainWindow = null;
   });
 
   // Update tray status when page loads
   mainWindow.webContents.on('did-finish-load', () => {
+    const currentUrl = mainWindow?.webContents.getURL() ?? '';
+
+    // Ignore splash screen finish events
+    if (currentUrl.startsWith('data:text/html') && isSplashActive) {
+      logDiagnostic('debug', 'splash.loaded', 'Splash screen finished loading');
+      return;
+    }
+
+    // App URL finished loading
     isFallbackPageActive = false;
+    isSplashActive = false;
     logDiagnostic('info', 'window.did_finish_load', 'Main window finished loading APP_URL');
     updateTrayStatus('connected');
   });
@@ -723,11 +830,17 @@ function handleDeepLink(rawUrl: string): void {
       }
 
       if (parsed.action === 'reload') {
+        suppressSplashAutoNavigation = true;
+        cancelPendingSplashNavigation('deep-link:reload');
+        isSplashActive = false;
         windowRef.loadURL(config.appUrl).catch((error) => {
           console.error('Failed to reload APP_URL from deep link:', error);
           loadFallbackPage('Connection Failed', `Unable to connect to ${config.appUrl}`);
         });
       } else if (parsed.action === 'settings') {
+        suppressSplashAutoNavigation = true;
+        cancelPendingSplashNavigation('deep-link:settings');
+        isSplashActive = false;
         windowRef.loadURL(buildSettingsUrl()).catch((error) => {
           console.error('Failed to open settings from deep link:', error);
           loadFallbackPage('Connection Failed', 'Unable to open settings');
@@ -739,6 +852,9 @@ function handleDeepLink(rawUrl: string): void {
       return;
 
     case 'route': {
+      suppressSplashAutoNavigation = true;
+      cancelPendingSplashNavigation('deep-link:route');
+      isSplashActive = false;
       const targetUrl = new URL(parsed.path, config.appUrl).toString();
       windowRef.loadURL(targetUrl).catch((error) => {
         console.error('Failed to open deep-link route:', error);
