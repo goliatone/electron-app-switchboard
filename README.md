@@ -42,12 +42,54 @@ Set environment variables to customize behavior:
 | `UPDATE_CHECK_INTERVAL` | `6` | Hours between update checks (0 to disable periodic) |
 | `ENABLE_DEEP_LINKS` | `true` | Enable `switchboard://` deep links |
 | `DEEP_LINK_SCHEME` | `switchboard` | Deep link scheme |
+| `SPLASH_ENABLED` | `true` | Enable/disable splash screen |
 
 Example:
 
 ```bash
 APP_URL=https://debug.example.com npm run dev
 ```
+
+### Splash Screen Configuration
+
+The splash screen can be customized via the config file:
+
+```json
+{
+  "splash": {
+    "enabled": true,
+    "logoPath": "./assets/logo.png",
+    "logoWidth": 80,
+    "backgroundColor": "#1a1a2e",
+    "textColor": "#e8e8e8",
+    "textColorSecondary": "#a0a0a0",
+    "accentColor": "#4f46e5",
+    "loadingText": "Connecting...",
+    "appName": "Switchboard",
+    "showVersion": true
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `true` | Enable/disable splash screen |
+| `customHtmlPath` | - | Path to custom splash HTML (overrides generated) |
+| `logoPath` | - | Path to logo image (PNG/SVG) |
+| `logoWidth` | `80` | Logo width in pixels |
+| `logoHeight` | - | Logo height (auto if not set) |
+| `backgroundColor` | `#1a1a2e` | Background color |
+| `textColor` | `#e8e8e8` | Primary text color |
+| `textColorSecondary` | `#a0a0a0` | Secondary/muted text color |
+| `accentColor` | `#4f46e5` | Accent color (spinner, etc.) |
+| `loadingText` | `Connecting...` | Loading status text |
+| `appName` | `Switchboard` | App name shown on splash |
+| `showVersion` | `true` | Show app version on splash |
+
+For full customization, create a custom `splash.html` and set `splash.customHtmlPath`.
+
+Relative splash asset paths (`customHtmlPath`, `logoPath`) are resolved from the
+directory of the loaded config file when available.
 
 ## Building
 
