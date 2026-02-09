@@ -29,6 +29,7 @@ Implementation: `src/shared/config.ts`.
 | `UPDATE_CHECK_INTERVAL` | number (hours) | `6` | Periodic update check interval (`0` disables periodic checks) |
 | `ENABLE_DEEP_LINKS` | boolean | `true` | Enables app protocol handling |
 | `DEEP_LINK_SCHEME` | string | `switchboard` | Protocol scheme (`switchboard://...`) |
+| `SPLASH_ENABLED` | boolean | `true` | Enables/disables splash screen during startup |
 | `SWITCHBOARD_CONFIG` | file path | unset | Optional explicit config file path |
 
 ## Config File Schema
@@ -48,6 +49,11 @@ Config file keys map 1:1 to `ConfigFile` fields:
 - `updateCheckInterval`
 - `enableDeepLinks`
 - `deepLinkScheme`
+- `splash`
+
+Notes:
+- Relative splash asset paths (`splash.customHtmlPath`, `splash.logoPath`) are
+  resolved relative to the loaded config file directory when available.
 
 Example file: `switchboard.config.example.json`.
 
@@ -107,4 +113,3 @@ ALLOW_HTTP_LOCALHOST=false
 TRUST_LOCALHOST_WILDCARD=false
 UPDATE_CHANNEL=stable
 ```
-
