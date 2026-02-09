@@ -13,5 +13,17 @@
   "updateChannel": "stable",
   "updateCheckInterval": 6,
   "enableDeepLinks": true,
-  "deepLinkScheme": "switchboard"
+  "deepLinkScheme": "switchboard",
+  "splash": {
+    "enabled": true,
+    "logoPath": "./assets/logo.png",
+    "logoWidth": 80,
+    "backgroundColor": "#1a1a2e",
+    "textColor": "#e8e8e8",
+    "textColorSecondary": "#a0a0a0",
+    "accentColor": "#4f46e5",
+    "loadingText": "Connecting...",
+    "appName": "Switchboard",
+    "showVersion": true
+  }
 }
