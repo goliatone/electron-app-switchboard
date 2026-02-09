@@ -1,7 +1,7 @@
 /**
  * Unified Notification Service
  *
- * @example
+ * @example Basic Usage
  * ```typescript
  * import { notifications } from './notifications';
  *
@@ -28,6 +28,27 @@
  *   desktop: { urgency: 'normal' }
  * });
  * console.log(result.route); // 'desktop' or 'toast'
+ * ```
+ *
+ * @example Toast Adapter Integration
+ * ```typescript
+ * import { createToastAdapter, bootstrapToastAdapter, FULL_CAPABILITIES } from './notifications';
+ *
+ * // At app startup - with hot-reload support
+ * bootstrapToastAdapter(() => createToastAdapter({
+ *   library: myToastLib,
+ *   capabilities: FULL_CAPABILITIES,
+ *   show: (lib, title, body, options) => {
+ *     lib[options.type](body, {
+ *       title,
+ *       duration: options.duration ?? undefined,
+ *       action: options.action ? {
+ *         label: options.action.label,
+ *         onClick: options.action.onClick
+ *       } : undefined
+ *     });
+ *   }
+ * }));
  * ```
  */
 
@@ -60,6 +81,41 @@ export {
   setDebugLogging,
   notifications,
 } from './notification-service';
+
+// Toast adapter types and utilities
+export type {
+  ToastLibraryCapabilities,
+  ToastAdapterConfig,
+  NormalizedToastOptions,
+} from './toast-adapter';
+
+export {
+  createToastAdapter,
+  createConsoleToastAdapter,
+  bootstrapToastAdapter,
+  isAdapterRegistered,
+  resetAdapterRegistration,
+  normalizeToastOptions,
+  mapTypeToMethod,
+  mapTypeToClass,
+  MINIMAL_CAPABILITIES,
+  FULL_CAPABILITIES,
+} from './toast-adapter';
+
+// Compatibility layer for migration
+export type {
+  LegacyNotifyFn,
+  LegacyToastFn,
+  GlobalNotifyAPI,
+} from './compat';
+
+export {
+  createGlobalNotifyAPI,
+  wrapLegacyNotify,
+  wrapLegacyToast,
+  transient,
+  detectObsoletePatterns,
+} from './compat';
 
 // Default export
 export { default } from './notification-service';

@@ -73,11 +73,27 @@ export function setDebugLogging(enabled: boolean): void {
 // ============================================================================
 
 /**
+ * Get the electron bridge from the global scope
+ * Works in both browser (window) and Node.js (globalThis) environments
+ */
+function getElectronBridge() {
+  // Check window first (browser/Electron renderer)
+  if (typeof window !== 'undefined' && window.electronBridge) {
+    return window.electronBridge;
+  }
+  // Check globalThis (works in all environments, useful for testing)
+  if (typeof globalThis !== 'undefined' && (globalThis as { electronBridge?: typeof window.electronBridge }).electronBridge) {
+    return (globalThis as { electronBridge?: typeof window.electronBridge }).electronBridge;
+  }
+  return undefined;
+}
+
+/**
  * Check if the desktop notification bridge is available
  * Validates that the bridge exists and has callable methods
  */
 export function hasDesktopBridge(): boolean {
-  const bridge = window.electronBridge;
+  const bridge = getElectronBridge();
 
   if (!bridge) {
     return false;
@@ -118,7 +134,7 @@ async function checkDesktopPermission(): Promise<boolean> {
   // Perform the permission check
   permissionCheckInFlight = (async () => {
     try {
-      const bridge = window.electronBridge;
+      const bridge = getElectronBridge();
       if (!bridge?.notifications?.requestPermission) {
         permissionCache = false;
         return false;
@@ -235,7 +251,7 @@ async function showDesktop(
   options?: NotifyOptions['desktop']
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const bridge = window.electronBridge;
+    const bridge = getElectronBridge();
     if (!bridge?.notifications?.show) {
       return { success: false, error: 'Desktop bridge not available' };
     }
