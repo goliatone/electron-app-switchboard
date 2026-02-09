@@ -1,0 +1,84 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish artifacts to GitHub Releases
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sign-notarize-publish:
+    runs-on: macos-13
+    permissions:
+      contents: write
+
+    env:
+      ELECTRON_BUILDER_CACHE: ./.cache/electron-builder
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Validate signing and notarization secrets
+        run: |
+          missing=0
+          for key in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then
+              echo "::error::$key is not set"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Package and publish macOS artifacts
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        run: npx electron-builder --mac --x64 --arm64 --publish always
+
+      - name: Package macOS artifacts (no publish)
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
+        run: npx electron-builder --mac --x64 --arm64 --publish never
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: switchboard-macos-artifacts
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.yml
+            release/*.yaml
+            release/*.blockmap
+          if-no-files-found: error
