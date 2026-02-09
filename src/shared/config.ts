@@ -18,6 +18,8 @@ import { app } from 'electron';
 export interface AppConfig {
   /** Primary URL to load in the renderer */
   appUrl: string;
+  /** Directory containing the loaded config file (if any) */
+  configDirectory?: string;
   /** Trusted origins for navigation and IPC validation */
   trustedOrigins: string[];
   /** Allow HTTP for localhost in development */
@@ -42,6 +44,36 @@ export interface AppConfig {
   enableDeepLinks: boolean;
   /** Deep link protocol scheme */
   deepLinkScheme: string;
+  /** Splash screen configuration */
+  splash: SplashConfig;
+}
+
+/** Splash screen configuration */
+export interface SplashConfig {
+  /** Enable splash screen while loading (default: true) */
+  enabled: boolean;
+  /** Path to custom splash HTML file (overrides generated splash) */
+  customHtmlPath?: string;
+  /** Path to logo image (PNG/SVG, relative to app or absolute) */
+  logoPath?: string;
+  /** Logo width in pixels (default: 80) */
+  logoWidth: number;
+  /** Logo height in pixels (default: auto) */
+  logoHeight?: number;
+  /** Background color (hex or CSS color, default: #1a1a2e) */
+  backgroundColor: string;
+  /** Text color (default: #e8e8e8) */
+  textColor: string;
+  /** Secondary/muted text color (default: #a0a0a0) */
+  textColorSecondary: string;
+  /** Accent/spinner color (default: #4f46e5) */
+  accentColor: string;
+  /** Loading text (default: "Connecting...") */
+  loadingText: string;
+  /** App name displayed on splash (default: "Switchboard") */
+  appName: string;
+  /** Show app version on splash (default: true) */
+  showVersion: boolean;
 }
 
 /** Config file structure (all fields optional) */
@@ -59,6 +91,12 @@ export interface ConfigFile {
   updateCheckInterval?: number;
   enableDeepLinks?: boolean;
   deepLinkScheme?: string;
+  splash?: Partial<SplashConfig>;
+}
+
+interface LoadedConfigFile {
+  config: ConfigFile;
+  path: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -118,14 +156,17 @@ function getConfigPaths(): string[] {
 /**
  * Load and parse config file if it exists
  */
-function loadConfigFile(): ConfigFile | null {
+function loadConfigFile(): LoadedConfigFile | null {
   // Check for explicit config file path via environment
   const explicitPath = process.env.SWITCHBOARD_CONFIG;
   if (explicitPath) {
     try {
       const content = fs.readFileSync(explicitPath, 'utf-8');
       console.log(`Loaded config from: ${explicitPath}`);
-      return JSON.parse(content) as ConfigFile;
+      return {
+        config: JSON.parse(content) as ConfigFile,
+        path: explicitPath,
+      };
     } catch (err) {
       console.error(`Failed to load config from ${explicitPath}:`, err);
       return null;
@@ -138,7 +179,10 @@ function loadConfigFile(): ConfigFile | null {
       if (fs.existsSync(configPath)) {
         const content = fs.readFileSync(configPath, 'utf-8');
         console.log(`Loaded config from: ${configPath}`);
-        return JSON.parse(content) as ConfigFile;
+        return {
+          config: JSON.parse(content) as ConfigFile,
+          path: configPath,
+        };
       }
     } catch {
       // Continue to next path
@@ -172,6 +216,133 @@ function hasEnv(key: string): boolean {
   return process.env[key] !== undefined;
 }
 
+function parseSplashBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function parseSplashPath(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 1024 || trimmed.includes('\0')) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function parseSplashString(
+  value: unknown,
+  fallback: string,
+  field: string,
+  maxLength: number
+): string {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > maxLength) {
+    console.warn(`Invalid splash.${field}. Falling back to default.`);
+    return fallback;
+  }
+
+  return trimmed;
+}
+
+function parseSplashNumber(
+  value: unknown,
+  fallback: number,
+  field: string,
+  min: number,
+  max: number
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const rounded = Math.round(value);
+  if (rounded < min || rounded > max) {
+    console.warn(`Invalid splash.${field}. Falling back to default.`);
+    return fallback;
+  }
+
+  return rounded;
+}
+
+function parseSplashOptionalNumber(
+  value: unknown,
+  field: string,
+  min: number,
+  max: number
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    console.warn(`Invalid splash.${field}. Ignoring value.`);
+    return undefined;
+  }
+
+  const rounded = Math.round(value);
+  if (rounded < min || rounded > max) {
+    console.warn(`Invalid splash.${field}. Ignoring value.`);
+    return undefined;
+  }
+
+  return rounded;
+}
+
+function isValidSplashColor(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) return false;
+
+  const hexColor = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+  const rgbLikeColor = /^(?:rgb|rgba|hsl|hsla)\(\s*[0-9.%\s,]+\)$/i;
+  const namedColor = /^[a-zA-Z]+$/;
+
+  return hexColor.test(trimmed) || rgbLikeColor.test(trimmed) || namedColor.test(trimmed);
+}
+
+function parseSplashColor(value: unknown, fallback: string, field: string): string {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (!isValidSplashColor(trimmed)) {
+    console.warn(`Invalid splash.${field}. Falling back to default.`);
+    return fallback;
+  }
+
+  return trimmed;
+}
+
+function normalizeSplashConfig(
+  input: Partial<SplashConfig> | undefined,
+  defaults: SplashConfig,
+  envEnabledOverride?: boolean
+): SplashConfig {
+  return {
+    enabled: envEnabledOverride ?? parseSplashBoolean(input?.enabled, defaults.enabled),
+    customHtmlPath: parseSplashPath(input?.customHtmlPath),
+    logoPath: parseSplashPath(input?.logoPath),
+    logoWidth: parseSplashNumber(input?.logoWidth, defaults.logoWidth, 'logoWidth', 16, 512),
+    logoHeight: parseSplashOptionalNumber(input?.logoHeight, 'logoHeight', 16, 512),
+    backgroundColor: parseSplashColor(input?.backgroundColor, defaults.backgroundColor, 'backgroundColor'),
+    textColor: parseSplashColor(input?.textColor, defaults.textColor, 'textColor'),
+    textColorSecondary: parseSplashColor(
+      input?.textColorSecondary,
+      defaults.textColorSecondary,
+      'textColorSecondary'
+    ),
+    accentColor: parseSplashColor(input?.accentColor, defaults.accentColor, 'accentColor'),
+    loadingText: parseSplashString(input?.loadingText, defaults.loadingText, 'loadingText', 120),
+    appName: parseSplashString(input?.appName, defaults.appName, 'appName', 64),
+    showVersion: parseSplashBoolean(input?.showVersion, defaults.showVersion),
+  };
+}
+
 // -----------------------------------------------------------------------------
 // Main Config Loading
 // -----------------------------------------------------------------------------
@@ -191,6 +362,17 @@ const DEFAULTS: Omit<AppConfig, 'trustedOrigins'> & { trustedOrigins?: string[] 
   updateCheckInterval: 6,
   enableDeepLinks: true,
   deepLinkScheme: 'switchboard',
+  splash: {
+    enabled: true,
+    logoWidth: 80,
+    backgroundColor: '#1a1a2e',
+    textColor: '#e8e8e8',
+    textColorSecondary: '#a0a0a0',
+    accentColor: '#4f46e5',
+    loadingText: 'Connecting...',
+    appName: 'Switchboard',
+    showVersion: true,
+  },
 };
 
 /**
@@ -203,7 +385,9 @@ const DEFAULTS: Omit<AppConfig, 'trustedOrigins'> & { trustedOrigins?: string[] 
  */
 export function loadConfig(): AppConfig {
   // Load config file (if exists)
-  const fileConfig = loadConfigFile() ?? {};
+  const loadedConfig = loadConfigFile();
+  const fileConfig = loadedConfig?.config ?? {};
+  const configDirectory = loadedConfig ? path.dirname(loadedConfig.path) : undefined;
 
   // Merge: defaults <- file <- env
   const rawAppUrl =
@@ -235,6 +419,7 @@ export function loadConfig(): AppConfig {
 
   const config: AppConfig = {
     appUrl,
+    configDirectory,
     trustedOrigins,
 
     allowHttpLocalhost:
@@ -280,6 +465,12 @@ export function loadConfig(): AppConfig {
     deepLinkScheme:
       hasEnv('DEEP_LINK_SCHEME') ? getEnv('DEEP_LINK_SCHEME', 'switchboard') :
       fileConfig.deepLinkScheme ?? DEFAULTS.deepLinkScheme,
+
+    splash: normalizeSplashConfig(
+      fileConfig.splash,
+      DEFAULTS.splash,
+      hasEnv('SPLASH_ENABLED') ? getEnvBool('SPLASH_ENABLED', true) : undefined
+    ),
   };
 
   return config;
